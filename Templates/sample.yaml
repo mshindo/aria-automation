@@ -1,0 +1,9 @@
+formatVersion: 1
+name: demo-template
+description: Simple cloud template
+resources:
+  Cloud_Machine_1:
+    type: Cloud.Machine
+    properties:
+      image: ubuntu
+      flavor: small
