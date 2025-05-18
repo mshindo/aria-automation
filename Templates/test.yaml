@@ -1,0 +1,596 @@
+formatVersion: 2
+metadata:
+  deploymentSettings:
+    disableUpdateDay2Action: true
+    hideDisabledDay2Actions: true
+variables:
+  registryPassword: ${input.registryPassword == "" ? propgroup.vpaif_dl_vgpu_vpaif_quickstart_1.registry_password:input.registryPassword}
+  httpProxy: ''
+  httpsProxy: ''
+  software:
+    pytorch:
+      overview: |
+        #### PyTorch
+
+        The PyTorch NGC Container is optimized for GPU acceleration, and contains a validated set of libraries that enable and optimize GPU performance. This container also contains software for accelerating ETL (DALI, RAPIDS), Training (cuDNN, NCCL), and Inference (TensorRT) workloads.        
+
+        https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch
+      applications:
+        - name: JupyterLab
+          port: 8888
+          url: http://$HOST:$PORT/
+      services:
+        - name: DCGM Exporter
+          port: 9400
+          exposeToAll: ${input.exposeDCGM}
+      cloudInit:
+        write_files:
+          - path: /opt/dlvm/dl_app.sh
+            permissions: '0755'
+            content: |
+              %{raw}#!/bin/bash
+              set -eu
+              source /opt/dlvm/utils.sh
+              trap 'error_exit "Unexpected error occurs at dl workload"' ERR
+              set_proxy "http" "https" "socks5"
+
+              DEFAULT_REG_URI="nvcr.io"
+              REGISTRY_URI_PATH=$(grep registry-uri /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+
+              if [[ -z "$REGISTRY_URI_PATH" ]]; then
+                # If REGISTRY_URI_PATH is null or empty, use the default value
+                REGISTRY_URI_PATH=$DEFAULT_REG_URI
+                echo "REGISTRY_URI_PATH was empty. Using default: $REGISTRY_URI_PATH"
+              fi
+
+              # If REGISTRY_URI_PATH contains '/', extract the URI part
+              if [[ $REGISTRY_URI_PATH == *"/"* ]]; then
+                REGISTRY_URI=$(echo "$REGISTRY_URI_PATH" | cut -d'/' -f1)
+              else
+                REGISTRY_URI=$REGISTRY_URI_PATH
+              fi
+
+              REGISTRY_USERNAME=$(grep registry-user /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              REGISTRY_PASSWORD=$(grep registry-passwd /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
+                docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $REGISTRY_URI
+              else
+                echo "Warning: the registry's username and password are invalid, Skipping Docker login."
+              fi
+
+              deploy_dcgm_exporter
+
+              CONFIG_JSON_BASE64=$(grep 'config-json' /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              CONFIG_JSON=$(echo ${CONFIG_JSON_BASE64} | base64 --decode)
+
+              enableJupyterAuth=$(echo "${CONFIG_JSON}" | jq -r '.enable_jupyter_auth // empty')
+
+              if [ -z "${enableJupyterAuth}" ] || [ "${enableJupyterAuth}" == true ]; then
+                # Generate a random jupyter token
+                token=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+                # Set the token to guestinfo
+                vmtoolsd --cmd "info-set guestinfo.dlworkload.jupyterlab.token $token"
+              else
+                token=""
+              fi
+
+              echo "Info: running the PyTorch container"
+              docker run -d --gpus all -p 8888:8888 $REGISTRY_URI_PATH/nvidia/pytorch-pb24h1:24.03.02-py3 /bin/bash -c "source /usr/local/nvm/nvm.sh; /usr/local/bin/jupyter lab --allow-root --ip=* --port=8888 --no-browser --NotebookApp.token=$token --NotebookApp.allow_origin=* --notebook-dir=/workspace"%{endraw}
+    tensorflow:
+      overview: |
+        #### TensorFlow
+
+        The TensorFlow NGC Container is optimized for GPU acceleration, and contains a validated set of libraries that enable and optimize GPU performance. This container may also contain modifications to the TensorFlow source code in order to maximize performance and compatibility. This container also contains software for accelerating ETL (DALI, RAPIDS), Training (cuDNN, NCCL), and Inference (TensorRT) workloads.
+
+        https://catalog.ngc.nvidia.com/orgs/nvidia/containers/tensorflow
+      applications:
+        - name: JupyterLab
+          port: 8888
+          url: http://$HOST:$PORT/
+      services:
+        - name: DCGM Exporter
+          port: 9400
+          exposeToAll: ${input.exposeDCGM}
+      cloudInit:
+        write_files:
+          - path: /opt/dlvm/dl_app.sh
+            permissions: '0755'
+            content: |
+              %{raw}#!/bin/bash
+              set -eu
+              source /opt/dlvm/utils.sh
+              trap 'error_exit "Unexpected error occurs at dl workload"' ERR
+              set_proxy "http" "https" "socks5"
+
+              DEFAULT_REG_URI="nvcr.io"
+              REGISTRY_URI_PATH=$(grep registry-uri /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+
+              if [[ -z "$REGISTRY_URI_PATH" ]]; then
+                # If REGISTRY_URI_PATH is null or empty, use the default value
+                REGISTRY_URI_PATH=$DEFAULT_REG_URI
+                echo "REGISTRY_URI_PATH was empty. Using default: $REGISTRY_URI_PATH"
+              fi
+
+              # If REGISTRY_URI_PATH contains '/', extract the URI part
+              if [[ $REGISTRY_URI_PATH == *"/"* ]]; then
+                REGISTRY_URI=$(echo "$REGISTRY_URI_PATH" | cut -d'/' -f1)
+              else
+                REGISTRY_URI=$REGISTRY_URI_PATH
+              fi
+
+              REGISTRY_USERNAME=$(grep registry-user /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              REGISTRY_PASSWORD=$(grep registry-passwd /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
+                docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $REGISTRY_URI
+              else
+                echo "Warning: the registry's username and password are invalid, Skipping Docker login."
+              fi
+
+              deploy_dcgm_exporter
+
+              CONFIG_JSON_BASE64=$(grep 'config-json' /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              CONFIG_JSON=$(echo ${CONFIG_JSON_BASE64} | base64 --decode)
+
+              enableJupyterAuth=$(echo "${CONFIG_JSON}" | jq -r '.enable_jupyter_auth // empty')
+
+              if [ -z "${enableJupyterAuth}" ] || [ "${enableJupyterAuth}" == true ]; then
+                # Generate a random jupyter token
+                token=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+                # Set the token to guestinfo
+                vmtoolsd --cmd "info-set guestinfo.dlworkload.jupyterlab.token $token"
+              else
+                token=""
+              fi
+
+              echo "Info: running the Tensorflow container"    
+              docker run -d --gpus all -p 8888:8888 $REGISTRY_URI_PATH/nvidia/tensorflow-pb24h1:24.03.02-tf2-py3 /bin/bash -c "source /usr/local/nvm/nvm.sh; /usr/local/bin/jupyter lab --allow-root --ip=* --port=8888 --no-browser --NotebookApp.token=$token --NotebookApp.allow_origin=* --notebook-dir=/workspace"%{endraw}
+    cudasamples:
+      overview: |
+        #### CUDA Samples
+
+        This is a collection of containers to run CUDA workloads on the GPUs. The collection includes containerized CUDA samples for example, vectorAdd (to demonstrate vector addition), nbody (or gravitational n-body simulation) and other examples. These containers can be used for validating the software configuration of GPUs in the system or simply to run some example workloads.
+
+        https://catalog.ngc.nvidia.com/orgs/nvidia/teams/k8s/containers/cuda-sample
+      applications: []
+      services:
+        - name: DCGM Exporter
+          port: 9400
+          exposeToAll: ${input.exposeDCGM}
+      cloudInit:
+        write_files:
+          - path: /opt/dlvm/dl_app.sh
+            permissions: '0755'
+            content: |
+              %{raw}#!/bin/bash
+              set -eu
+              source /opt/dlvm/utils.sh
+              set_proxy "http" "https" "socks5"
+              trap 'error_exit "Unexpected error occurs at dl workload"' ERR
+              DEFAULT_REG_URI="nvcr.io"
+              REGISTRY_URI_PATH=$(grep registry-uri /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+
+              if [[ -z "$REGISTRY_URI_PATH" ]]; then
+                # If REGISTRY_URI_PATH is null or empty, use the default value
+                REGISTRY_URI_PATH=$DEFAULT_REG_URI
+                echo "REGISTRY_URI_PATH was empty. Using default: $REGISTRY_URI_PATH"
+              fi
+
+              # If REGISTRY_URI_PATH contains '/', extract the URI part
+              if [[ $REGISTRY_URI_PATH == *"/"* ]]; then
+                REGISTRY_URI=$(echo "$REGISTRY_URI_PATH" | cut -d'/' -f1)
+              else
+                REGISTRY_URI=$REGISTRY_URI_PATH
+              fi
+
+              REGISTRY_USERNAME=$(grep registry-user /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              REGISTRY_PASSWORD=$(grep registry-passwd /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
+                docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $REGISTRY_URI
+              else
+                echo "Warning: the registry's username and password are invalid, Skipping Docker login."
+              fi
+
+              deploy_dcgm_exporter
+
+              echo "Info: running the vectoradd CUDA container"
+              docker run -d $REGISTRY_URI_PATH/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubi8%{endraw}
+    none:
+      overview: |
+        #### DCGM Exporter
+
+        DCGM-Exporter is an exporter for Prometheus to monitor the health and get metrics from GPUs. It leverages DCGM using Go bindings to collect GPU telemetry and exposes GPU metrics to Prometheus using an http endpoint (/metrics). DCGM-Exporter can be used either standalone or deployed as part of the NVIDIA GPU Operator.
+
+        https://catalog.ngc.nvidia.com/orgs/nvidia/teams/k8s/containers/dcgm-exporter
+      applications: []
+      services:
+        - name: DCGM Exporter
+          port: 9400
+          exposeToAll: ${input.exposeDCGM}
+      cloudInit:
+        write_files:
+          - path: /opt/dlvm/dl_app.sh
+            permissions: '0755'
+            content: |
+              %{raw}#!/bin/bash
+              set -eu
+              source /opt/dlvm/utils.sh
+              trap 'error_exit "Unexpected error occurs at dl workload"' ERR
+              set_proxy "http" "https" "socks5"
+
+              DEFAULT_REG_URI="nvcr.io"
+              REGISTRY_URI_PATH=$(grep registry-uri /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+
+              if [[ -z "$REGISTRY_URI_PATH" ]]; then
+                # If REGISTRY_URI_PATH is null or empty, use the default value
+                REGISTRY_URI_PATH=$DEFAULT_REG_URI
+                echo "REGISTRY_URI_PATH was empty. Using default: $REGISTRY_URI_PATH"
+              fi
+
+              # If REGISTRY_URI_PATH contains '/', extract the URI part
+              if [[ $REGISTRY_URI_PATH == *"/"* ]]; then
+                REGISTRY_URI=$(echo "$REGISTRY_URI_PATH" | cut -d'/' -f1)
+              else
+                REGISTRY_URI=$REGISTRY_URI_PATH
+              fi
+
+              REGISTRY_USERNAME=$(grep registry-user /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              REGISTRY_PASSWORD=$(grep registry-passwd /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
+                docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $REGISTRY_URI
+              else
+                echo "Warning: the registry's username and password are invalid, Skipping Docker login."
+              fi
+
+              deploy_dcgm_exporter%{endraw}
+
+              ## added by shindo
+              pip install --upgrade pip
+              pip install torch transformers accelerate
+              curl -fsSL https://ollama.com/install.sh | sh
+              sudo curl -fsSL --output-dir /opt/data -O https://huggingface.co/elyza/Llama-3-ELYZA-JP-8B-GGUF/resolve/main/Llama-3-ELYZA-JP-8B-q4_k_m.gguf
+              ollama create llama-3-elyza-jp-8b -f /opt/dlvm/Modelfile
+              # ollama run llama-3-elyza-jp-8b
+          - path: /opt/dlvm/Modelfile
+            permissions: '0755'
+            content: |
+              FROM /opt/data/Llama-3-ELYZA-JP-8B-q4_k_m.gguf
+              TEMPLATE """{{ if .System }}<|start_header_id|>system<|end_header_id|>
+
+              {{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>
+
+              {{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>
+
+              {{ .Response }}<|eot_id|>"""
+              PARAMETER stop "<|start_header_id|>"
+              PARAMETER stop "<|end_header_id|>"
+              PARAMETER stop "<|eot_id|>"
+              PARAMETER stop "<|reserved_special_token"
+  services: ${variable.baseMachine.services + variable.software[input.software].services}
+  applications: ${variable.baseMachine.applications + variable.software[input.software].applications}
+  exposedPorts: ${map_by(filter_by(variable.services, svc => svc.exposeToAll), svc => svc.port) + map_by(variable.applications, app => app.port)}
+  customCloudInit: '${input.customCloudInit != "" ? from_yaml(input.customCloudInit, decode_binary=false) : {}}'
+  cloudInit: |
+    #cloud-config
+    ${to_yaml(merge(merge(variable.baseMachine.cloudInit, variable.software[input.software].cloudInit, list_merge='append'), variable.customCloudInit, list_merge='append'))}
+  baseMachine:
+    applications: []
+    services:
+      - name: SSH
+        port: 22
+        exposeToAll: true
+    cloudInit:
+      ssh_pwauth: true
+      fs_setup:
+        - label: data
+          filesystem: ext4
+          device: /dev/sdb
+      mounts:
+        - - /dev/sdb
+          - /opt/data
+          - auto
+          - defaults,nofail
+          - '0'
+          - '0'
+      write_files:
+        - path: /opt/dlvm/utils.sh
+          permissions: '0755'
+          content: |
+            %{raw}#!/bin/bash
+            error_exit() {
+              echo "Error: $1" >&2
+              vmtoolsd --cmd "info-set guestinfo.vmservice.bootstrap.condition false, DLWorkloadFailure, $1"
+              exit 1
+            }
+
+            check_protocol() {
+              local proxy_url=$1
+              shift
+              local supported_protocols=("$@")
+              if [[ -n "${proxy_url}" ]]; then
+                local protocol=$(echo "${proxy_url}" | awk -F '://' '{if (NF > 1) print $1; else print ""}')
+                if [ -z "$protocol" ]; then
+                  echo "No specific protocol provided. Skipping protocol check."
+                  return 0
+                fi
+                local protocol_included=false
+                for var in "${supported_protocols[@]}"; do
+                  if [[ "${protocol}" == "${var}" ]]; then
+                    protocol_included=true
+                    break
+                  fi
+                done
+                if [[ "${protocol_included}" == false ]]; then
+                  error_exit "Unsupported protocol: ${protocol}. Supported protocols are: ${supported_protocols[*]}"
+                fi
+              fi
+            }
+
+            # $@: list of supported protocols
+            set_proxy() {
+              local supported_protocols=("$@")
+
+              CONFIG_JSON_BASE64=$(grep 'config-json' /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              CONFIG_JSON=$(echo ${CONFIG_JSON_BASE64} | base64 --decode)
+
+              HTTP_PROXY_URL=$(echo "${CONFIG_JSON}" | jq -r '.http_proxy // empty')
+              HTTPS_PROXY_URL=$(echo "${CONFIG_JSON}" | jq -r '.https_proxy // empty')
+              if [[ $? -ne 0 || (-z "${HTTP_PROXY_URL}" && -z "${HTTPS_PROXY_URL}") ]]; then
+                echo "Info: The config-json was parsed, but no proxy settings were found."
+                return 0
+              fi
+
+              check_protocol "${HTTP_PROXY_URL}" "${supported_protocols[@]}"
+              check_protocol "${HTTPS_PROXY_URL}" "${supported_protocols[@]}"
+
+              if ! grep -q 'http_proxy' /etc/environment; then
+                sudo bash -c 'echo "export http_proxy=${HTTP_PROXY_URL}
+                export https_proxy=${HTTPS_PROXY_URL}
+                export HTTP_PROXY=${HTTP_PROXY_URL}
+                export HTTPS_PROXY=${HTTPS_PROXY_URL}
+                export no_proxy=localhost,127.0.0.1" >> /etc/environment'
+                source /etc/environment
+              fi
+
+              # Configure Docker to use a proxy
+              sudo mkdir -p /etc/systemd/system/docker.service.d
+              sudo bash -c 'echo "[Service]
+              Environment=\"HTTP_PROXY=${HTTP_PROXY_URL}\"
+              Environment=\"HTTPS_PROXY=${HTTPS_PROXY_URL}\"
+              Environment=\"NO_PROXY=localhost,127.0.0.1\"" > /etc/systemd/system/docker.service.d/proxy.conf'
+              sudo systemctl daemon-reload
+              sudo systemctl restart docker
+
+              echo "Info: docker and system environment are now configured to use the proxy settings"
+            }
+
+            deploy_dcgm_exporter() {
+              CONFIG_JSON_BASE64=$(grep 'config-json' /opt/dlvm/ovf-env.xml | sed -n 's/.*oe:value="\([^"]*\).*/\1/p')
+              CONFIG_JSON=$(echo ${CONFIG_JSON_BASE64} | base64 --decode)
+              DCGM_EXPORT_PUBLIC=$(echo "${CONFIG_JSON}" | jq -r '.export_dcgm_to_public // empty')
+
+              DCGM_EXPORTER_IMAGE="$REGISTRY_URI_PATH/nvidia/k8s/dcgm-exporter"
+              DCGM_EXPORTER_VERSION="3.2.5-3.1.8-ubuntu22.04"
+              if [ -z "${DCGM_EXPORT_PUBLIC}" ] || [ "${DCGM_EXPORT_PUBLIC}" == true ]; then
+                echo "Launching DCGM Exporter to collect vGPU metrics, exposed on all network interfaces (0.0.0.0:9400)"
+                docker run -d --gpus all --cap-add SYS_ADMIN -p 9400:9400 $DCGM_EXPORTER_IMAGE:$DCGM_EXPORTER_VERSION
+              else
+                echo "Launching DCGM Exporter to collect vGPU metrics, listening only on localhost (127.0.0.1:9400)"
+                docker run -d --gpus all --cap-add SYS_ADMIN -p 127.0.0.1:9400:9400 $DCGM_EXPORTER_IMAGE:$DCGM_EXPORTER_VERSION
+              fi
+            }%{endraw}
+outputs:
+  __deploymentOverview:
+    value: |
+      ### AI workstation
+
+      ${variable.software[input.software].overview}
+
+      To troubleshoot Private AI deployments, see the [Troubleshooting Guide](https://docs.vmware.com/en/VMware-Cloud-Foundation/5.2/context?id=vcf_496)
+
+      %{if length(variable.applications) > 0}
+      #### Applications
+
+      %{for app in variable.applications}- [${app.name}](${replace(replace(app.url, "$HOST", "{{resource.dlVmService.object.status.loadBalancer.ingress.[0].ip}}"), "$PORT", to_string(app.port))})
+      %{endfor}
+      %{endif}
+
+      For more information on using DCGM Exporter to monitor GPU - visit this link
+      - https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/latest/dcgm-exporter.html
+
+      %{if length(variable.services) > 0}
+      #### Services
+
+      %{for svc in variable.services}- ${svc.name} - ${!svc.exposeToAll ? "localhost" : "{{resource.dlVmService.object.status.loadBalancer.ingress.[0].ip}}"}:${svc.port}
+      %{endfor}
+      %{endif}
+
+      #### Workstation VM
+
+      - ssh `vmware@{{resource.dlVmService.object.status.loadBalancer.ingress.[0].ip}} -L 11434:127.0.0.1:11434`
+      - Data storage mounted at `/opt/data`
+      - Manage VM and Supervisor Namespace via [Cloud Consumption Interface](/automation/#/service/catalog/consume/cci/projects/${env.projectName}/namespaces/{{resource.cciNamespace.name}}/summary)
+      %{if input.enableJupyter}- Fetch auth token using the command `vmtoolsd --cmd "info-get guestinfo.dlworkload.jupyterlab.token"`%{endif}
+inputs:
+  namespaceName:
+    type: string
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+    maxLength: 63
+    minLength: 1
+  vmClassName:
+    type: string
+    title: VM Class
+    description: Virtual Machine Class Name
+    oneOf:
+      - title: gpu-test-class - 1 vGPU(4 GB), 4 CPUs and 10 GB memory
+        const: gpu-test-class
+      - title: gpu-large-24c - 1 vGPU(4 GB), 4 CPUs and 10 GB memory
+        const: gpu-large-24c
+    default: gpu-test-class
+  dataStorageSize:
+    type: string
+    title: Data Disk Size
+    description: Data disk mounted at "/opt/data"
+    enum:
+      - 32Gi
+      - 64Gi
+      - 128Gi
+      - 256Gi
+      - 512Gi
+    default: 32Gi
+  password:
+    type: string
+    title: User Password
+    description: Password for user "vmware"
+    encrypted: true
+  sshPublicKeys:
+    type: string
+    description: The content of the user public key (for example, ~/.ssh/id_rsa.pub)
+    title: SSH Public Keys
+    default: ''
+  software:
+    type: string
+    title: Software Bundle
+    description: Select a software bundle you want pre-installed on the workstation
+    oneOf:
+      - title: PyTorch
+        const: pytorch
+      - title: TensorFlow
+        const: tensorflow
+      - title: CUDA Samples
+        const: cudasamples
+      - title: None
+        const: none
+    default: pytorch
+  customCloudInit:
+    type: string
+    title: Custom cloud-init
+    description: Custom cloud-init configuration
+    default: ''
+  registryUri:
+    type: string
+    title: Container Registry URI
+    description: Container registry URI
+    default: nvcr.io
+  registryUser:
+    type: string
+    title: Registry Username
+    description: Container registry User name
+    default: $oauthtoken
+  registryPassword:
+    type: string
+    title: Registry Password
+    description: Container registry Password
+    encrypted: true
+    default: ''
+  exposeDCGM:
+    type: boolean
+    title: Expose DCGM to public
+    description: Expose DCGM to public
+    default: true
+  enableJupyter:
+    type: boolean
+    title: Enable Jupyter Lab Auth
+    description: Enable Jupyter Lab Auth
+    default: true
+resources:
+  cciNamespace:
+    type: CCI.Supervisor.Namespace
+    properties:
+      name: ${input.namespaceName}
+      regionName: private-ai-foundation-65jo2xaj
+      className: vpaif-quickstart-1
+  dlVmService:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha1
+        kind: VirtualMachineService
+        metadata:
+          name: dl-vm-service
+        spec:
+          ports: '${map_by(variable.exposedPorts, port => {"name": "tcp" + port, "port": port, "protocol": "TCP", "targetPort": port})}'
+          selector:
+            vm-selector: ${input.namespaceName}
+          type: LoadBalancer
+  dlVmDataStorage:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: dl-vm-data-storage
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: ${input.dataStorageSize}
+          storageClassName: vsan-default-storage-policy
+          volumeMode: Filesystem
+  dlVmCloudInit:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: dl-vm-cloud-init
+        stringData:
+          hostname: paif-dl
+          password: ${input.password}
+          public-keys: ${input.sshPublicKeys}
+          user-data: ${base64_encode(variable.cloudInit)}
+          vgpu-license: ${propgroup.vpaif_dl_vgpu_vpaif_quickstart_1.vgpu_license}
+          vgpu-url: ${propgroup.vpaif_dl_vgpu_vpaif_quickstart_1.vgpu_url}
+          nvidia-portal-api-key: ${propgroup.vpaif_dl_vgpu_vpaif_quickstart_1.nvidia_portal_api_key}
+          registry-uri: ${input.registryUri}
+          registry-user: ${input.registryUser}
+          registry-passwd: ${variable.registryPassword}
+          config-json: ${base64_encode(format('{"http_proxy":"%s","https_proxy":"%s","export_dcgm_to_public":"%s","enable_jupyter_auth":"%s"}',variable.httpProxy,variable.httpsProxy,input.exposeDCGM,input.enableJupyter))}
+  dlVm:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - dlVmDataStorage
+      - dlVmCloudInit
+    properties:
+      wait:
+        conditions:
+          - type: Ready
+            status: 'True'
+          - type: GuestBootstrap
+            status: 'True'
+          - type: GuestBootstrap
+            status: 'False'
+            reason: Failure
+            indicatesFailure: true
+          - type: GuestBootstrap
+            status: 'False'
+            reason: DLWorkloadFailure
+            indicatesFailure: true
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha1
+        kind: VirtualMachine
+        metadata:
+          name: ${input.namespaceName}
+          labels:
+            vm-selector: ${input.namespaceName}
+        spec:
+          imageName: vmi-466168cc42d973f7a
+          className: ${input.vmClassName}
+          powerState: poweredOn
+          storageClass: vsan-default-storage-policy
+          volumes:
+            - name: dl-vm-data-vol
+              persistentVolumeClaim:
+                claimName: dl-vm-data-storage
+          readinessProbe:
+            tcpSocket:
+              port: 22
+          vmMetadata:
+            secretName: dl-vm-cloud-init
+            transport: OvfEnv
